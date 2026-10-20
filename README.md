@@ -16,12 +16,14 @@ OS는 `/etc/os-release`를 읽어 자동으로 판별하므로, 어느 서버든
 ## 빠른 시작
 
 ```bash
-# 1. 서버에 업로드 (경로는 어디든 상관없음)
-scp fail2ban-agent.sh user@server:~
+# 1. 서버에서 바로 내려받기
+curl -fsSLO https://raw.githubusercontent.com/yoush0111/Fail2ban_Agent/main/fail2ban-agent.sh
 
-# 2. 서버에서 root 권한으로 실행
-ssh user@server
-sudo bash ~/fail2ban-agent.sh
+#    (서버가 GitHub에 접속할 수 없다면 PC에서 업로드. 경로는 어디든 상관없음)
+#    scp fail2ban-agent.sh user@server:~
+
+# 2. root 권한으로 실행
+sudo bash fail2ban-agent.sh
 ```
 
 ```
@@ -34,8 +36,17 @@ sudo bash ~/fail2ban-agent.sh
 
 처음 설치하는 서버라면 **1 → 2 → 3** 순서로 진행합니다.
 
-- 실행 권한(`chmod +x`)은 필요하지 않습니다.
-- 관리 메뉴를 계속 쓸 거라면 `/root`나 `/usr/local/sbin`처럼 지워지지 않는 곳에 두세요. `/tmp`는 재부팅하면 사라질 수 있습니다.
+- `bash 파일명`으로 실행하므로 실행 권한(`chmod +x`)은 필요하지 않습니다.
+- `/tmp`는 재부팅하면 사라질 수 있으니, 관리 메뉴를 계속 쓸 거라면 아래처럼 설치해 두세요.
+
+### 계속 쓸 서버라면: root 소유로 설치
+
+```bash
+sudo install -o root -g root -m 700 fail2ban-agent.sh /usr/local/sbin/fail2ban-agent
+sudo fail2ban-agent      # 이후 어디서든 실행
+```
+
+이 스크립트는 root로 실행됩니다. 일반 계정이 소유한 파일로 두면, 그 계정이 탈취됐을 때 스크립트에 명령이 몰래 추가될 수 있습니다. 그러면 관리자가 다음에 `sudo`로 실행하는 순간 그 명령이 root 권한으로 실행됩니다. 소유자는 root, 권한은 `700`으로 두세요(`777`은 금지).
 
 ## 메뉴 설명
 
@@ -63,6 +74,7 @@ sudo bash ~/fail2ban-agent.sh
 - 시간은 `600`(초), `10m`, `1h`, `1d`, `1w` 형식으로 입력합니다.
 - IP는 `1.2.3.4`, `211.10.20.0/24`, `2001:db8::/32` 형식을 받습니다.
 - 재차단될 때마다 차단 시간이 늘어나며(`bantime.increment`), 최대 1주일입니다.
+- recidive는 fail2ban 자체 로그 파일(`logtarget`, 보통 `/var/log/fail2ban.log`)을 읽습니다. 설치 직후에는 이 파일이 아직 없으므로 스크립트가 미리 만들어 둡니다. SELinux 환경에서는 보안 레이블도 맞춥니다(`restorecon`). 로그가 파일이 아니라 journal로 설정된 서버라면 recidive를 건너뜁니다.
 
 결과는 `/etc/fail2ban/jail.d/local.conf`에 저장됩니다.
 
@@ -102,6 +114,7 @@ IP 입력 칸에서 아무것도 입력하지 않고 Enter를 누르면 취소�
 | 설정 단계에서 검사 실패 | 화면에 나온 오류 확인. Ubuntu는 `python3-systemd`가 설치됐는지, CentOS 7은 `fail2ban-systemd`가 설치됐는지 확인 |
 | 차단 목록에 있는데 접속이 계속됨 | firewalld가 실행 중인지, 앞단 로드밸런서나 프록시 때문에 실제 IP가 안 보이는지 확인 |
 | 로그인 실패가 집계되지 않음 | `journalctl _COMM=sshd \| grep Failed`로 로그를 확인한 뒤 `fail2ban-regex systemd-journal sshd`로 필터 테스트 |
+| `Have not found any log file for recidive jail` | 스크립트 이전 버전에서 생기던 오류. 최신 스크립트로 다시 설정하거나, recidive를 끄고 설정 |
 | OpenSSH 9.8 이상에서 집계 안 됨 | 로그가 `sshd-session` 이름으로 남음. fail2ban 1.1.0 이상 필요 |
 | 내 IP가 차단됨 | 콘솔 등 다른 경로로 접속해 관리 → 차단 해제 후 예외 IP 추가 |
 
@@ -113,6 +126,6 @@ bash test_validators.sh      # 입력 검증 함수 테스트
 ```
 
 `test_validators.sh`는 개발 PC에서만 쓰는 테스트이며, 서버에 올릴 필요가 없습니다.
-파일은 반드시 LF 줄바꿈으로 저장하세요. CRLF로 저장되면 서버에서 실행이 깨집니다.
+`.sh` 파일은 `.gitattributes`(`*.sh text eol=lf`)로 LF 줄바꿈이 고정됩니다. CRLF로 바뀌면 서버에서 `$'\r': command not found` 오류가 나니, Git을 거치지 않고 복사할 때도 LF인지 확인하세요.
 
 자세한 배경 설명은 [fail2ban 설치 및 설정 가이드](fail2ban%20설치%20및%20설정%20가이드.md)를 참고하세요.
