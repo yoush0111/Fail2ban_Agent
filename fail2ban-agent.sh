@@ -115,35 +115,36 @@ require_fail2ban() {
 
 # ── 1) 설치 ──────────────────────────────────────────────────
 
-# firewalld가 꺼져 있으면 경고 후 확인받고 켠다 (SSH 포트는 켜기 전에 허용)
-ensure_firewalld() {
-  local port=$1
+# RHEL 설치 패키지. firewalld를 안 쓰는 서버는 firewalld가 딸려 오지 않도록
+# 메타 패키지(fail2ban) 대신 fail2ban-server 를 설치한다
+# (firewalld가 새로 설치되면 부팅 시 자동으로 켜져 다른 포트가 막힐 수 있음)
+rhel_packages() {
+  local pkgs
   if systemctl is-active --quiet firewalld; then
-    info "firewalld 실행 중"
-    return 0
+    pkgs=(fail2ban fail2ban-firewalld)
+  elif [[ $OS_MAJOR == 7 ]]; then
+    pkgs=(fail2ban-server iptables)
+  else
+    pkgs=(fail2ban-server nftables)
   fi
-  warn "firewalld가 꺼져 있습니다. 켜면 허용되지 않은 포트는 모두 막힙니다."
-  warn "현재 LISTEN 중인 포트 (SSH ${port}/tcp 는 자동 허용):"
-  ss -tlnu >&2
-  if ! confirm "firewalld를 켤까요?"; then
-    warn "firewalld 없이는 차단 목록에만 표시되고 실제로는 막히지 않습니다"
-    return 1
-  fi
-  firewall-offline-cmd --add-port="${port}/tcp" >/dev/null || { err "SSH 포트 허용 실패, firewalld를 켜지 않습니다"; return 1; }
-  systemctl enable --now firewalld && info "firewalld 시작 (${port}/tcp 허용)"
+  # journal(backend = systemd) 읽기 지원
+  if [[ $OS_MAJOR == 7 ]]; then pkgs+=(fail2ban-systemd); else pkgs+=(python3-systemd); fi
+  echo "${pkgs[@]}"
 }
 
 do_install() {
   if [[ $OS_FAMILY == rhel ]]; then
-    local pkgs=(fail2ban fail2ban-firewalld)
-    if [[ $OS_MAJOR == 7 ]]; then
-      warn "CentOS 7은 EOL(2024-06)입니다. 미러 문제로 설치가 실패할 수 있습니다."
-      pkgs+=(fail2ban-systemd)
+    [[ $OS_MAJOR == 7 ]] && warn "CentOS 7은 EOL(2024-06)입니다. 미러 문제로 설치가 실패할 수 있습니다."
+    if systemctl is-active --quiet firewalld; then
+      info "firewalld 실행 중 → firewalld로 차단합니다"
+    else
+      info "firewalld 미사용 → firewalld는 건드리지 않고 iptables/nftables로 공격 IP만 차단합니다"
     fi
+    local pkgs
+    read -ra pkgs <<< "$(rhel_packages)"
     if ! { $PKG install -y epel-release && $PKG install -y "${pkgs[@]}"; }; then
       err "패키지 설치 실패"; return 1
     fi
-    ensure_firewalld "$(ssh_port)"
   else
     # python3-systemd: journal(backend = systemd)을 읽는 데 필요
     if ! { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban python3-systemd; }; then
@@ -199,6 +200,7 @@ maxretry = $maxretry
 bantime.increment = true
 bantime.maxtime   = 1w
 ignoreip = 127.0.0.1/8 ::1 $admin
+$(ban_actions)
 
 [sshd]
 enabled = true
@@ -210,6 +212,20 @@ EOF
     content+=$(recidive_section)
   fi
   apply_conf "$content" restart
+}
+
+# 차단 방식. firewalld가 꺼진 RHEL은 패키지 기본값(00-firewalld.conf)을 덮어써서
+# iptables/nftables에 차단 IP만 넣는다 → 다른 포트는 건드리지 않음.
+# firewalld 실행 중이거나 Ubuntu면 패키지 기본값 그대로 사용 (빈 출력)
+ban_actions() {
+  [[ $OS_FAMILY == rhel ]] || return 0
+  systemctl is-active --quiet firewalld && return 0
+  if systemctl is-enabled --quiet firewalld 2>/dev/null; then
+    warn "firewalld가 부팅 시 켜지도록 되어 있습니다. 쓰지 않는다면: systemctl disable firewalld"
+  fi
+  local fw=nftables
+  [[ $OS_MAJOR == 7 ]] && fw=iptables
+  printf 'banaction = %s-multiport\nbanaction_allports = %s-allports' "$fw" "$fw"
 }
 
 # fail2ban 자체 로그 위치 (나중에 읽힌 설정이 우선)

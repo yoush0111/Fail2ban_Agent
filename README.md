@@ -5,13 +5,14 @@ OS는 `/etc/os-release`를 읽어 자동으로 판별하므로, 어느 서버든
 
 ## 지원 OS
 
-| OS | 패키지 | 차단 방식 |
+| OS | 패키지 관리자 | 차단 방식 |
 |---|---|---|
-| Rocky / Alma / CentOS Stream 8·9 | `dnf` + EPEL (`fail2ban`, `fail2ban-firewalld`) | firewalld |
-| CentOS 7 (EOL) | `yum` + EPEL (`fail2ban-systemd` 추가) | firewalld |
-| Ubuntu / Debian | `apt` (`fail2ban`, `python3-systemd`) | 패키지 기본값 (nftables/iptables). ufw는 건드리지 않음 |
+| Rocky / Alma / CentOS Stream 8·9 | `dnf` + EPEL | firewalld 실행 중이면 firewalld, 아니면 **nftables** |
+| CentOS 7 (EOL) | `yum` + EPEL | firewalld 실행 중이면 firewalld, 아니면 **iptables** |
+| Ubuntu / Debian | `apt` | 패키지 기본값 (iptables/nftables). ufw는 건드리지 않음 |
 
-모든 OS에서 SSH 로그인 실패는 journal(`backend = systemd`)에서 읽습니다.
+- 모든 OS에서 SSH 로그인 실패는 journal(`backend = systemd`)에서 읽습니다.
+- **firewalld를 켜거나 포트를 막지 않습니다.** firewalld가 없는 서버에서는 fail2ban이 자기 전용 규칙에 공격 IP만 넣어 차단하고, 나머지 포트는 그대로 둡니다. 접근 통제는 클라우드 보안그룹(네이버클라우드 ACG 등)에 맡기고, fail2ban은 SSH 무작위 대입만 막는 구성입니다.
 
 ## 빠른 시작
 
@@ -52,11 +53,17 @@ sudo fail2ban-agent      # 이후 어디서든 실행
 
 ### 1) 설치
 
-- 패키지를 설치합니다. RHEL 계열은 EPEL 저장소를 먼저 추가합니다.
-- **RHEL 계열은 firewalld 상태를 확인합니다.** firewalld가 꺼져 있으면 차단 목록에만 표시되고 실제로는 막히지 않기 때문입니다.
-  - 꺼져 있으면 경고와 함께 현재 열려 있는(LISTEN) 포트 목록을 보여 주고, `y`를 입력해야만 켭니다.
-  - 켜기 전에 SSH 포트부터 허용하므로 SSH 접속은 끊기지 않습니다.
-  - 그 외 서비스 포트(웹, DB 등)는 직접 열어야 합니다. 예: `firewall-cmd --permanent --add-service=http && firewall-cmd --reload`
+- 패키지를 설치합니다. RHEL 계열은 EPEL 저장소를 먼저 추가하고, firewalld 실행 여부에 따라 설치할 패키지를 고릅니다.
+
+| 상황 | 설치 패키지 |
+|---|---|
+| firewalld 실행 중 | `fail2ban`, `fail2ban-firewalld` |
+| firewalld 없음 / 꺼짐 (Rocky 8·9) | `fail2ban-server`, `nftables` |
+| firewalld 없음 / 꺼짐 (CentOS 7) | `fail2ban-server`, `iptables` |
+| 공통 (journal 읽기) | CentOS 7은 `fail2ban-systemd`, Rocky 8·9는 `python3-systemd` |
+| Ubuntu / Debian | `fail2ban`, `python3-systemd` |
+
+firewalld를 쓰지 않는 서버에서 메타 패키지 `fail2ban` 대신 `fail2ban-server`를 설치하는 이유가 있습니다. 메타 패키지를 설치하면 firewalld가 함께 설치되는데, 이렇게 새로 설치된 firewalld는 부팅할 때 자동으로 켜질 수 있습니다. 그러면 다른 포트가 막힐 수 있습니다.
 
 ### 2) 설정
 
@@ -76,6 +83,8 @@ sudo fail2ban-agent      # 이후 어디서든 실행
 - 재차단될 때마다 차단 시간이 늘어나며(`bantime.increment`), 최대 1주일입니다.
 - recidive는 fail2ban 자체 로그 파일(`logtarget`, 보통 `/var/log/fail2ban.log`)을 읽습니다. 설치 직후에는 이 파일이 아직 없으므로 스크립트가 미리 만들어 둡니다. SELinux 환경에서는 보안 레이블도 맞춥니다(`restorecon`). 로그가 파일이 아니라 journal로 설정된 서버라면 recidive를 건너뜁니다.
 
+- 차단 방식(`banaction`)은 설정할 때 자동으로 정해집니다. RHEL에서 firewalld가 꺼져 있으면 `banaction = nftables-multiport`(CentOS 7은 `iptables-multiport`)를 적어 패키지 기본값(firewalld)을 덮어씁니다. firewalld가 꺼져 있어도 부팅 시 켜지도록 등록되어 있으면 경고합니다.
+
 결과는 `/etc/fail2ban/jail.d/local.conf`에 저장됩니다.
 
 1. 기존 파일이 있으면 `local.conf.bak.YYYYMMDDHHMMSS`로 백업합니다.
@@ -93,7 +102,7 @@ sudo fail2ban-agent      # 이후 어디서든 실행
 
 | 메뉴 | 동작 |
 |---|---|
-| 상태 보기 | 활성 jail 목록, sshd 실패 횟수와 차단 IP 목록. RHEL은 firewalld 차단 규칙도 표시 |
+| 상태 보기 | 활성 jail 목록, sshd 실패 횟수와 차단 IP 목록. firewalld 실행 중이면 firewalld 차단 규칙도 표시 |
 | 차단 해제 | 입력한 IP의 차단을 모든 jail에서 해제 (`fail2ban-client unban`) |
 | 예외 IP 보기 | 현재 적용 중인 차단 예외 IP 목록. fail2ban이 꺼져 있으면 `local.conf`의 값을 표시 |
 | 예외 IP 추가 | `local.conf`의 `ignoreip`에 추가 → 검사 → reload (실패 시 원복) |
@@ -112,7 +121,8 @@ IP 입력 칸에서 아무것도 입력하지 않고 Enter를 누르면 취소�
 | 증상 | 확인 사항 |
 |---|---|
 | 설정 단계에서 검사 실패 | 화면에 나온 오류 확인. Ubuntu는 `python3-systemd`가 설치됐는지, CentOS 7은 `fail2ban-systemd`가 설치됐는지 확인 |
-| 차단 목록에 있는데 접속이 계속됨 | firewalld가 실행 중인지, 앞단 로드밸런서나 프록시 때문에 실제 IP가 안 보이는지 확인 |
+| 차단 목록에 있는데 접속이 계속됨 | 실제 차단 규칙 확인: `nft list ruleset \| grep -A5 f2b` (Rocky) / `iptables -L -n \| grep -A5 f2b` (CentOS 7) / `firewall-cmd --list-rich-rules` (firewalld). 앞단 로드밸런서나 프록시 때문에 실제 IP가 안 보이는지도 확인 |
+| 이전 버전으로 firewalld가 켜짐 | 이전 스크립트는 firewalld를 켜고 SSH 포트만 열었음. `systemctl disable --now firewalld` 후 **2) 설정**을 다시 실행 |
 | 로그인 실패가 집계되지 않음 | `journalctl _COMM=sshd \| grep Failed`로 로그를 확인한 뒤 `fail2ban-regex systemd-journal sshd`로 필터 테스트 |
 | `Have not found any log file for recidive jail` | 스크립트 이전 버전에서 생기던 오류. 최신 스크립트로 다시 설정하거나, recidive를 끄고 설정 |
 | OpenSSH 9.8 이상에서 집계 안 됨 | 로그가 `sshd-session` 이름으로 남음. fail2ban 1.1.0 이상 필요 |

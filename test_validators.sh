@@ -39,5 +39,19 @@ printf '[Definition]\nlogtarget = SYSTEMD-JOURNAL  \n' > "$F2B_DIR/fail2ban.d/01
 [[ $(fail2ban_logtarget) == SYSTEMD-JOURNAL ]] || { echo "FAIL: logtarget 덮어쓰기"; fail=1; }
 rm -rf "$F2B_DIR"
 
+# 차단 방식: firewalld 꺼진 RHEL만 iptables/nftables 지정
+FW_ACTIVE=1
+systemctl() { [[ $1 == is-active ]] && return $FW_ACTIVE; return 1; }
+OS_FAMILY=rhel OS_MAJOR=7
+[[ $(ban_actions) == *"banaction = iptables-multiport"* ]] || { echo "FAIL: CentOS 7 iptables"; fail=1; }
+[[ $(rhel_packages) == "fail2ban-server iptables fail2ban-systemd" ]] || { echo "FAIL: CentOS 7 패키지"; fail=1; }
+OS_MAJOR=9
+[[ $(ban_actions) == *"banaction = nftables-multiport"* ]] || { echo "FAIL: Rocky nftables"; fail=1; }
+FW_ACTIVE=0
+[[ -z $(ban_actions) ]] || { echo "FAIL: firewalld 실행 중이면 기본값"; fail=1; }
+[[ $(rhel_packages) == "fail2ban fail2ban-firewalld python3-systemd" ]] || { echo "FAIL: firewalld 패키지"; fail=1; }
+OS_FAMILY=debian FW_ACTIVE=1
+[[ -z $(ban_actions) ]] || { echo "FAIL: Ubuntu는 기본값"; fail=1; }
+
 [[ $fail == 0 ]] && echo "all passed"
 exit $fail
